@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. v1.0.0)'
+        required: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: >-
+            aarch64-apple-ios,
+            aarch64-apple-ios-sim,
+            x86_64-apple-ios,
+            aarch64-apple-darwin,
+            x86_64-apple-darwin
+
+      - uses: swatinem/rust-cache@v2
+
+      - name: Build XCFramework
+        run: make apple
+
+      - name: Zip framework
+        run: zip -r GhostLayer.xcframework.zip GhostLayer.xcframework
+
+      - name: Compute checksum
+        id: checksum
+        run: |
+          echo "value=$(swift package compute-checksum GhostLayer.xcframework.zip)" >> "$GITHUB_OUTPUT"
+
+      - name: Update Package.swift and tag
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          REPO="${GITHUB_REPOSITORY}"
+          URL="https://github.com/${REPO}/releases/download/${VERSION}/GhostLayer.xcframework.zip"
+          CHECKSUM="${{ steps.checksum.outputs.value }}"
+          sed -i '' \
+            -e "s|url: \".*\"|url: \"${URL}\"|" \
+            -e "s|checksum: \".*\"|checksum: \"${CHECKSUM}\"|" \
+            Package.swift
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Package.swift
+          git commit -m "chore: update Package.swift for ${VERSION}"
+          git tag "${VERSION}"
+          git push origin HEAD:main "${VERSION}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          files: GhostLayer.xcframework.zip
+          generate_release_notes: true
