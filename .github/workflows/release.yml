@@ -10,8 +10,16 @@ on:
 jobs:
   build:
     runs-on: macos-latest
-    permissions:
-      contents: write
+    strategy:
+      matrix:
+        target:
+          - aarch64-apple-ios
+          - aarch64-apple-ios-sim
+          - x86_64-apple-ios
+          - aarch64-apple-ios-macabi
+          - x86_64-apple-ios-macabi
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
 
     steps:
       - uses: actions/checkout@v6
@@ -19,19 +27,78 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: >-
-            aarch64-apple-ios,
-            aarch64-apple-ios-sim,
-            x86_64-apple-ios,
-            aarch64-apple-darwin,
-            x86_64-apple-darwin
-            aarch64-apple-ios-macabi
-            x86_64-apple-ios-macabi
+          targets: ${{ matrix.target }}
 
-      - uses: swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lib-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/libghostlayer.a
+
+  package:
+    runs-on: macos-latest
+    needs: build
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Restore artifact paths
+        run: |
+          for target in \
+            aarch64-apple-ios \
+            aarch64-apple-ios-sim \
+            x86_64-apple-ios \
+            aarch64-apple-ios-macabi \
+            x86_64-apple-ios-macabi \
+            aarch64-apple-darwin \
+            x86_64-apple-darwin; do
+            mkdir -p target/${target}/release
+            cp artifacts/lib-${target}/libghostlayer.a target/${target}/release/libghostlayer.a
+          done
+
+      - name: Lipo fat binaries
+        run: |
+          lipo -create \
+            target/aarch64-apple-ios-sim/release/libghostlayer.a \
+            target/x86_64-apple-ios/release/libghostlayer.a \
+            -output target/libghostlayer-sim.a
+          lipo -create \
+            target/aarch64-apple-ios-macabi/release/libghostlayer.a \
+            target/x86_64-apple-ios-macabi/release/libghostlayer.a \
+            -output target/libghostlayer-macabi.a
+          lipo -create \
+            target/aarch64-apple-darwin/release/libghostlayer.a \
+            target/x86_64-apple-darwin/release/libghostlayer.a \
+            -output target/libghostlayer-macos.a
+
+      - name: Prepare headers
+        run: |
+          mkdir -p include
+          cp header.h include/
+          cp GhostLayer.modulemap include/module.modulemap
 
       - name: Build XCFramework
-        run: make apple
+        run: |
+          xcodebuild -create-xcframework \
+            -library target/aarch64-apple-ios/release/libghostlayer.a \
+            -headers include \
+            -library target/libghostlayer-sim.a \
+            -headers include \
+            -library target/libghostlayer-macabi.a \
+            -headers include \
+            -library target/libghostlayer-macos.a \
+            -headers include \
+            -output GhostLayer.xcframework
 
       - name: Zip framework
         run: zip -r GhostLayer.xcframework.zip GhostLayer.xcframework
