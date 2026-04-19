@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 
 #[test]
-fn test_ffi_interface() {
+fn generate_pdf_from_ocr_returns_valid_pdf() {
     let json_path = Path::new("tests/en_ltr.json");
     let png_path = Path::new("tests/en_ltr.png");
     let output_path = Path::new("tests/output_ffi.pdf");
@@ -38,14 +38,13 @@ fn test_ffi_interface() {
 }
 
 #[test]
-fn test_pdf_ocr_document_convenience() {
+fn pdf_ocr_document_overlays_text_on_existing_pdf() {
     let img_bytes = fs::read("tests/en_ltr.png").expect("Read PNG");
     let json_content = fs::read_to_string("tests/en_ltr.json").expect("Read JSON");
 
     let img_reader = image::load_from_memory(&img_bytes).expect("Load image");
     let (width, height) = (img_reader.width(), img_reader.height());
 
-    // Build a 2-page source PDF.
     let c_json = CString::new(json_content.clone()).unwrap();
     let page1 = unsafe {
         generate_pdf_from_ocr(
@@ -59,9 +58,8 @@ fn test_pdf_ocr_document_convenience() {
     };
     assert!(!page1.data.is_null());
 
-    // pdf_ocr_document needs a multi-page PDF as input, so build one by calling
-    // generate_pdf_from_ocr twice and concatenating — instead we just use a
-    // single-page PDF and pass a 1-element JSON array.
+    // pdf_ocr_document expects a multi-page PDF; use a single-page PDF with a
+    // 1-element JSON array as a minimal valid input.
     let source_pdf = unsafe { std::slice::from_raw_parts(page1.data, page1.len) };
 
     let json0 = CString::new(json_content).expect("CString");
@@ -77,8 +75,10 @@ fn test_pdf_ocr_document_convenience() {
 
     free_pdf_buffer(out_buf);
     free_pdf_buffer(page1);
+}
 
-    // NULL input — should return null without crashing.
+#[test]
+fn pdf_ocr_document_null_input_returns_null() {
     let null_buf = unsafe { pdf_ocr_document(std::ptr::null(), 0, std::ptr::null(), 0) };
     assert!(null_buf.data.is_null());
 }

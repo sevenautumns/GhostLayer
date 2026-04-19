@@ -84,8 +84,8 @@ struct OCRInput {
 const FONT_DATA: &[u8] = include_bytes!("pdf.ttf");
 const FONT_NAME: &str = "f-0-0";
 
-const K_CHAR_WIDTH: f64 = 2.0;
-const NOMINAL_GLYPH_WIDTH: f64 = 1000.0 / K_CHAR_WIDTH;
+const CHAR_WIDTH: f64 = 2.0;
+const GLYPH_WIDTH_FONT_UNITS: f64 = 1000.0 / CHAR_WIDTH;
 
 const TO_UNICODE_CMAP: &str = r#"/CIDInit /ProcSet findresource begin
 12 dict begin
@@ -135,7 +135,7 @@ fn add_glyphless_font(doc: &mut Document) -> Object {
         "FontName" => n("GlyphLessFont"),
         "FontFile2" => font_stream_id,
         "Flags" => 5,
-        "FontBBox" => vec![0.into(), (-1).into(), NOMINAL_GLYPH_WIDTH.into(), 1000.into()],
+        "FontBBox" => vec![0.into(), (-1).into(), GLYPH_WIDTH_FONT_UNITS.into(), 1000.into()],
         "Ascent" => 1000,
         "Descent" => -1,
         "CapHeight" => 1000,
@@ -172,11 +172,11 @@ fn add_glyphless_font(doc: &mut Document) -> Object {
     doc.add_object(font_dict).into()
 }
 
-fn prec(n: f64) -> f64 {
+fn round3(n: f64) -> f64 {
     (n * 1000.0).round() / 1000.0
 }
 
-fn clip_baseline(p1: Point, p2: Point) -> (Point, Point) {
+fn level_baseline(p1: Point, p2: Point) -> (Point, Point) {
     let rise = (p2.y - p1.y).abs();
     let run = (p2.x - p1.x).abs();
     // Clip if nearly horizontal: same logic as Tesseract (rise < 2/72 inch threshold),
@@ -329,7 +329,7 @@ fn ocr_operations(
         let mut is_new_block = true;
 
         for line in paragraph.lines {
-            let (lp1, lp2) = clip_baseline(line.geometry.bottom_left, line.geometry.bottom_right);
+            let (lp1, lp2) = level_baseline(line.geometry.bottom_left, line.geometry.bottom_right);
             let (lx1, ly1) = to_pdf_pt(&lp1);
             let (lx2, ly2) = to_pdf_pt(&lp2);
 
@@ -372,12 +372,12 @@ fn ocr_operations(
                     ops.push(Operation::new(
                         "Tm",
                         vec![
-                            prec(a).into(),
-                            prec(b).into(),
-                            prec(c).into(),
-                            prec(d).into(),
-                            prec(px).into(),
-                            prec(py).into(),
+                            round3(a).into(),
+                            round3(b).into(),
+                            round3(c).into(),
+                            round3(d).into(),
+                            round3(px).into(),
+                            round3(py).into(),
                         ],
                     ));
                     is_new_block = false;
@@ -386,7 +386,7 @@ fn ocr_operations(
                     let dy = py - old_y;
                     let tx = dx * a + dy * b;
                     let ty = dx * c + dy * d;
-                    ops.push(Operation::new("Td", vec![prec(tx).into(), prec(ty).into()]));
+                    ops.push(Operation::new("Td", vec![round3(tx).into(), round3(ty).into()]));
                 }
 
                 old_x = px;
@@ -396,19 +396,19 @@ fn ocr_operations(
                 if (font_size - old_fontsize).abs() > 0.01 {
                     ops.push(Operation::new(
                         "Tf",
-                        vec![font_ref.clone(), prec(font_size).into()],
+                        vec![font_ref.clone(), round3(font_size).into()],
                     ));
                     old_fontsize = font_size;
                 }
 
                 let char_count = word.text.encode_utf16().count() as f64;
                 let h_scale = if char_count > 0.0 {
-                    let raw = K_CHAR_WIDTH * (100.0 * word_length) / (font_size * char_count);
+                    let raw = CHAR_WIDTH * (100.0 * word_length) / (font_size * char_count);
                     raw.clamp(1.0, 2000.0)
                 } else {
                     100.0
                 };
-                ops.push(Operation::new("Tz", vec![prec(h_scale).into()]));
+                ops.push(Operation::new("Tz", vec![round3(h_scale).into()]));
 
                 let mut utf16_bytes: Vec<u8> = word
                     .text
@@ -454,10 +454,10 @@ fn build_single_page_pdf(
         Operation::new(
             "cm",
             vec![
-                prec(width_pts).into(),
+                round3(width_pts).into(),
                 0.into(),
                 0.into(),
-                prec(height_pts).into(),
+                round3(height_pts).into(),
                 0.into(),
                 0.into(),
             ],
@@ -486,19 +486,19 @@ fn build_single_page_pdf(
 
                     ops.push(Operation::new(
                         "m",
-                        vec![prec(wx_bl).into(), prec(wy_bl).into()],
+                        vec![round3(wx_bl).into(), round3(wy_bl).into()],
                     ));
                     ops.push(Operation::new(
                         "l",
-                        vec![prec(wx_br).into(), prec(wy_br).into()],
+                        vec![round3(wx_br).into(), round3(wy_br).into()],
                     ));
                     ops.push(Operation::new(
                         "l",
-                        vec![prec(wx_tr).into(), prec(wy_tr).into()],
+                        vec![round3(wx_tr).into(), round3(wy_tr).into()],
                     ));
                     ops.push(Operation::new(
                         "l",
-                        vec![prec(wx_tl).into(), prec(wy_tl).into()],
+                        vec![round3(wx_tl).into(), round3(wy_tl).into()],
                     ));
                     ops.push(Operation::new("h", vec![]));
                     ops.push(Operation::new("S", vec![]));
@@ -515,7 +515,7 @@ fn build_single_page_pdf(
     let page_dict = dictionary! {
         "Type" => "Page",
         "Parent" => pages_id,
-        "MediaBox" => vec![0.into(), 0.into(), prec(width_pts).into(), prec(height_pts).into()],
+        "MediaBox" => vec![0.into(), 0.into(), round3(width_pts).into(), round3(height_pts).into()],
         "Contents" => content_id,
         "Resources" => dictionary! {
             "Font" => dictionary! { FONT_NAME => font_id },
@@ -727,25 +727,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn prec_rounds_down() {
-        assert_eq!(prec(1.2344), 1.234);
+    fn round3_rounds_down() {
+        assert_eq!(round3(1.2344), 1.234);
     }
 
     #[test]
-    fn prec_rounds_up() {
-        assert_eq!(prec(1.2345), 1.235);
+    fn round3_rounds_up() {
+        assert_eq!(round3(1.2345), 1.235);
     }
 
     #[test]
-    fn prec_negative_zero_stays_negative() {
+    fn round3_negative_zero_stays_negative() {
         // Tesseract has a special case to convert -0 to 0; we don't.
-        // This test documents that our prec(-0.0) == -0.0 (IEEE 754).
-        assert!(prec(-0.0).is_sign_negative());
+        // This test documents that our round3(-0.0) == -0.0 (IEEE 754).
+        assert!(round3(-0.0).is_sign_negative());
     }
 
     #[test]
-    fn prec_large_value_unchanged_in_integer_part() {
-        assert_eq!(prec(1234.5678), 1234.568);
+    fn round3_large_value_unchanged_in_integer_part() {
+        assert_eq!(round3(1234.5678), 1234.568);
     }
 
     fn pt(x: f64, y: f64) -> Point {
@@ -753,9 +753,9 @@ mod tests {
     }
 
     #[test]
-    fn clip_baseline_nearly_horizontal_clips() {
+    fn level_baseline_nearly_horizontal_clips() {
         // rise/run = 0.001/0.5 = 0.002, well below 0.028 threshold
-        let (p1, p2) = clip_baseline(pt(0.1, 0.500), pt(0.6, 0.501));
+        let (p1, p2) = level_baseline(pt(0.1, 0.500), pt(0.6, 0.501));
         let avg_y = (0.500 + 0.501) / 2.0;
         assert_eq!(p1.y, avg_y);
         assert_eq!(p2.y, avg_y);
@@ -764,40 +764,40 @@ mod tests {
     }
 
     #[test]
-    fn clip_baseline_exact_horizontal_clips() {
-        let (p1, p2) = clip_baseline(pt(0.1, 0.5), pt(0.9, 0.5));
+    fn level_baseline_exact_horizontal_clips() {
+        let (p1, p2) = level_baseline(pt(0.1, 0.5), pt(0.9, 0.5));
         assert_eq!(p1.y, 0.5);
         assert_eq!(p2.y, 0.5);
     }
 
     #[test]
-    fn clip_baseline_vertical_unchanged() {
+    fn level_baseline_vertical_unchanged() {
         // run = 0, rise = 0.5 → must not clip
-        let (p1, p2) = clip_baseline(pt(0.5, 0.1), pt(0.5, 0.6));
+        let (p1, p2) = level_baseline(pt(0.5, 0.1), pt(0.5, 0.6));
         assert_eq!(p1, pt(0.5, 0.1));
         assert_eq!(p2, pt(0.5, 0.6));
     }
 
     #[test]
-    fn clip_baseline_diagonal_unchanged() {
+    fn level_baseline_diagonal_unchanged() {
         // 45°: rise == run → ratio 1.0, far above 0.028
-        let (p1, p2) = clip_baseline(pt(0.1, 0.1), pt(0.6, 0.6));
+        let (p1, p2) = level_baseline(pt(0.1, 0.1), pt(0.6, 0.6));
         assert_eq!(p1, pt(0.1, 0.1));
         assert_eq!(p2, pt(0.6, 0.6));
     }
 
     #[test]
-    fn clip_baseline_too_short_unchanged() {
+    fn level_baseline_too_short_unchanged() {
         // run < 0.01 → skip clipping even if nearly horizontal
-        let (p1, p2) = clip_baseline(pt(0.1, 0.500), pt(0.105, 0.5001));
+        let (p1, p2) = level_baseline(pt(0.1, 0.500), pt(0.105, 0.5001));
         assert_eq!(p1, pt(0.1, 0.500));
         assert_eq!(p2, pt(0.105, 0.5001));
     }
 
     #[test]
-    fn clip_baseline_just_above_threshold_unchanged() {
+    fn level_baseline_just_above_threshold_unchanged() {
         // rise/run = 0.028 → equal to threshold, should NOT clip (strict <)
-        let (p1, p2) = clip_baseline(pt(0.0, 0.0), pt(0.5, 0.014));
+        let (p1, p2) = level_baseline(pt(0.0, 0.0), pt(0.5, 0.014));
         assert_eq!(p1, pt(0.0, 0.0));
         assert_eq!(p2, pt(0.5, 0.014));
     }
