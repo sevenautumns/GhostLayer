@@ -16,8 +16,8 @@ let package = Package(
         ),
         .binaryTarget(
             name: "GhostLayerFFI",
-            url: "https://github.com/sevenautumns/GhostLayer/releases/download/v0.1.1/GhostLayer.xcframework.zip",
-            checksum: "1b5d146677804516075031adc14de64a0653d38d4a49254a4d5403b459420825"
+            url: "https://github.com/sevenautumns/GhostLayer/releases/download/v0.1.2/GhostLayer.xcframework.zip",
+            checksum: "57aa91b50c9bc51165c0c2d1c96779c0ed8f1d0a83465af24bacb556e35e6ad4"
         ),
         .testTarget(
             name: "GhostLayerTests",
