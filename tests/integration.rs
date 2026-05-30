@@ -154,6 +154,31 @@ fn doc_finish_ocr_to_path_overlays_existing_pdf() {
 }
 
 #[test]
+fn doc_finish_ocr_tolerates_trailing_nul_padding() {
+    let test_pages = load_all_test_pages();
+    let mut source_pdf = build_streaming_image_pdf(&test_pages);
+    source_pdf.extend(std::iter::repeat(0u8).take(1000));
+
+    let doc = ghost_layer_doc_new_ocr();
+    for p in &test_pages {
+        unsafe { ghost_layer_doc_add_ocr_page(doc, p.json.as_ptr()) };
+    }
+    let buf = unsafe {
+        ghostlayer::ghost_layer_doc_finish_ocr(doc, source_pdf.as_ptr(), source_pdf.len())
+    };
+    assert!(
+        !buf.data.is_null(),
+        "finish_ocr failed on padded PDF: {}",
+        last_error_string()
+    );
+    let bytes = unsafe { std::slice::from_raw_parts(buf.data, buf.len) }.to_vec();
+    free_pdf_buffer(buf);
+
+    let loaded = lopdf::Document::load_mem(&bytes).expect("parse ocr output");
+    assert_eq!(loaded.get_pages().len(), test_pages.len());
+}
+
+#[test]
 fn doc_finish_images_to_path_null_path_returns_error() {
     let doc = ghost_layer_doc_new_images();
     let rc = unsafe { ghost_layer_doc_finish_images_to_path(doc, std::ptr::null()) };

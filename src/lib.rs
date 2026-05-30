@@ -723,12 +723,21 @@ pub fn build_pdf_from_images<W: Write>(pages: &[ImagePage<'_>], sink: &mut W) ->
     builder.finish(sink)
 }
 
+// Trim trailing junk after the last `%%EOF`; lopdf only scans the last 512 bytes
+// for the xref, so padding (e.g. NUL bytes) would otherwise break load_mem.
+fn trim_after_eof(bytes: &[u8]) -> &[u8] {
+    match bytes.windows(5).rposition(|w| w == b"%%EOF") {
+        Some(i) => &bytes[..i + 5],
+        None => bytes,
+    }
+}
+
 pub fn write_ocr_document<W: Write>(
     pdf_bytes: &[u8],
     json_opts: &[Option<&str>],
     sink: &mut W,
 ) -> Result<()> {
-    let mut doc = Document::load_mem(pdf_bytes)?;
+    let mut doc = Document::load_mem(trim_after_eof(pdf_bytes))?;
     apply_ocr_to_doc(&mut doc, json_opts)?;
     doc.save_to(sink)?;
     Ok(())
