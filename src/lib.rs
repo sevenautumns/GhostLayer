@@ -629,16 +629,20 @@ fn apply_ocr_to_doc(doc: &mut Document, json_opts: &[Option<&str>]) -> Result<()
             .and_then(as_dict)
             .and_then(|d| d.get(b"Contents").ok().cloned());
 
-        let new_contents = match existing_contents {
-            Some(Object::Reference(id)) => {
-                Object::Array(vec![Object::Reference(id), Object::Reference(content_id)])
-            }
-            Some(Object::Array(mut arr)) => {
-                arr.push(Object::Reference(content_id));
-                Object::Array(arr)
-            }
-            _ => Object::Reference(content_id),
-        };
+        // Isolate existing content in a balanced q/Q so the OCR layer draws at the
+        // page's default CTM, even if the original leaves a residual transform.
+        let save_id = add_compressed_content(doc, vec![Operation::new("q", vec![])])?;
+        let restore_id = add_compressed_content(doc, vec![Operation::new("Q", vec![])])?;
+
+        let mut parts = vec![Object::Reference(save_id)];
+        match existing_contents {
+            Some(Object::Reference(id)) => parts.push(Object::Reference(id)),
+            Some(Object::Array(arr)) => parts.extend(arr),
+            _ => {}
+        }
+        parts.push(Object::Reference(restore_id));
+        parts.push(Object::Reference(content_id));
+        let new_contents = Object::Array(parts);
 
         if let Some(page_dict) = doc.objects.get_mut(page_id).and_then(as_dict_mut) {
             page_dict.set("Contents", new_contents);
