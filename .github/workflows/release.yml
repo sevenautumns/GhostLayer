@@ -84,9 +84,10 @@ jobs:
         id: checksum
         run: echo "value=$(make checksum)" >> "$GITHUB_OUTPUT"
 
-      - name: Update Package.swift and tag
+      - name: Update Package.swift, Cargo.toml and tag
         run: |
           VERSION="${{ github.event.inputs.version }}"
+          CRATE_VERSION="${VERSION#v}"
           REPO="${GITHUB_REPOSITORY}"
           URL="https://github.com/${REPO}/releases/download/${VERSION}/GhostLayer.xcframework.zip"
           CHECKSUM="${{ steps.checksum.outputs.value }}"
@@ -94,10 +95,13 @@ jobs:
             -e "s|url: \".*\"|url: \"${URL}\"|" \
             -e "s|checksum: \".*\"|checksum: \"${CHECKSUM}\"|" \
             Package.swift
+          sed -i '' \
+            -e "s|^version = \".*\"|version = \"${CRATE_VERSION}\"|" \
+            Cargo.toml
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Package.swift
-          git commit -m "chore: update Package.swift for ${VERSION}"
+          git add Package.swift Cargo.toml
+          git commit -m "chore: release ${VERSION}"
           git tag "${VERSION}"
           git push origin HEAD:main "${VERSION}"
 
