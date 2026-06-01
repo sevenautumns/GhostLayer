@@ -35,8 +35,6 @@ pub enum GhostLayerError {
     EmptyDocument,
     #[error("builder is poisoned by a prior error")]
     Poisoned,
-    #[error("MediaBox not found in page tree")]
-    MissingMediaBox,
     #[error("builder type mismatch")]
     BuilderTypeMismatch,
 }
@@ -74,6 +72,12 @@ pub extern "C" fn pdf_get_last_error() -> *const c_char {
 struct Point {
     x: f64,
     y: f64,
+}
+
+impl Point {
+    fn xy(self) -> (f64, f64) {
+        (self.x, self.y)
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, Copy)]
@@ -248,9 +252,9 @@ fn round3(n: f64) -> f64 {
 fn level_baseline(p1: Point, p2: Point) -> (Point, Point) {
     let rise = (p2.y - p1.y).abs();
     let run = (p2.x - p1.x).abs();
-    // Clip if nearly horizontal: same logic as Tesseract (rise < 2/72 inch threshold),
-    // adapted for normalized coords. Avoids wandering baselines in viewers like Preview.
-    if run > 0.01 && rise < run * 0.028 {
+    // Flatten near-horizontal baselines (slope < ~1.6°) so viewers like Preview
+    // don't render wandering selection rects.
+    if run > 1.0 && rise < run * 0.028 {
         let avg_y = (p1.y + p2.y) / 2.0;
         (Point { x: p1.x, y: avg_y }, Point { x: p2.x, y: avg_y })
     } else {
@@ -262,28 +266,6 @@ fn add_compressed_content(doc: &mut Document, ops: Vec<Operation>) -> Result<Obj
     let mut stream = Stream::new(dictionary! {}, Content { operations: ops }.encode()?);
     let _ = stream.compress();
     Ok(doc.add_object(stream))
-}
-
-fn get_media_box(doc: &Document, page_id: ObjectId) -> Result<[f64; 4]> {
-    let mut current = page_id;
-    loop {
-        let dict = doc.get_dictionary(current)?;
-        if let Ok(mb) = dict.get(b"MediaBox") {
-            let arr = mb.as_array()?;
-            if arr.len() >= 4 {
-                return Ok([
-                    arr[0].as_float()? as f64,
-                    arr[1].as_float()? as f64,
-                    arr[2].as_float()? as f64,
-                    arr[3].as_float()? as f64,
-                ]);
-            }
-        }
-        match dict.get(b"Parent").and_then(Object::as_reference) {
-            Ok(parent_id) => current = parent_id,
-            Err(_) => return Err(GhostLayerError::MissingMediaBox),
-        }
-    }
 }
 
 fn upsert_font(res: &mut Dictionary, font_obj: Object) {
@@ -347,24 +329,14 @@ fn add_font_to_page_resources(doc: &mut Document, page_id: ObjectId, font_obj: O
     }
 }
 
-fn ocr_operations(
-    width_pts: f64,
-    height_pts: f64,
-    x_off: f64,
-    y_off: f64,
-    font_ref: Object,
-    input: OCRInput,
-) -> Vec<Operation> {
-    let to_pdf_pt =
-        |p: &Point| -> (f64, f64) { (x_off + p.x * width_pts, y_off + p.y * height_pts) };
-
+fn ocr_operations(font_ref: Object, input: OCRInput) -> Vec<Operation> {
     let mut ops = Vec::new();
 
     for paragraph in input.paragraphs {
         for line in paragraph.lines {
             let (lp1, lp2) = level_baseline(line.geometry.bottom_left, line.geometry.bottom_right);
-            let (lx1, ly1) = to_pdf_pt(&lp1);
-            let (lx2, ly2) = to_pdf_pt(&lp2);
+            let (lx1, ly1) = lp1.xy();
+            let (lx2, ly2) = lp2.xy();
 
             let l_dx = lx2 - lx1;
             let l_dy = ly2 - ly1;
@@ -389,9 +361,9 @@ fn ocr_operations(
                     continue;
                 }
 
-                let (wx_tl, wy_tl) = to_pdf_pt(&word.geometry.top_left);
-                let (wx_bl, wy_bl) = to_pdf_pt(&word.geometry.bottom_left);
-                let (wx_br, wy_br) = to_pdf_pt(&word.geometry.bottom_right);
+                let (wx_tl, wy_tl) = word.geometry.top_left.xy();
+                let (wx_bl, wy_bl) = word.geometry.bottom_left.xy();
+                let (wx_br, wy_br) = word.geometry.bottom_right.xy();
 
                 let font_size = ((wx_tl - wx_bl).powi(2) + (wy_tl - wy_bl).powi(2)).sqrt();
                 let word_length = ((wx_br - wx_bl).powi(2) + (wy_br - wy_bl).powi(2)).sqrt();
@@ -514,8 +486,6 @@ fn add_image_page_to_doc(
 
         #[cfg(debug_assertions)]
         {
-            let to_pdf_pt = |p: &Point| -> (f64, f64) { (p.x * width_pts, p.y * height_pts) };
-
             ops.push(Operation::new("q", vec![]));
             ops.push(Operation::new("RG", vec![1.into(), 0.into(), 0.into()]));
             ops.push(Operation::new("w", vec![0.5.into()]));
@@ -523,9 +493,9 @@ fn add_image_page_to_doc(
             for paragraph in &input.paragraphs {
                 for line in &paragraph.lines {
                     for word in &line.words {
-                        let (wx_tl, wy_tl) = to_pdf_pt(&word.geometry.top_left);
-                        let (wx_bl, wy_bl) = to_pdf_pt(&word.geometry.bottom_left);
-                        let (wx_br, wy_br) = to_pdf_pt(&word.geometry.bottom_right);
+                        let (wx_tl, wy_tl) = word.geometry.top_left.xy();
+                        let (wx_bl, wy_bl) = word.geometry.bottom_left.xy();
+                        let (wx_br, wy_br) = word.geometry.bottom_right.xy();
 
                         let wx_tr = wx_tl + (wx_br - wx_bl);
                         let wy_tr = wy_tl + (wy_br - wy_bl);
@@ -554,9 +524,7 @@ fn add_image_page_to_doc(
             ops.push(Operation::new("Q", vec![]));
         }
 
-        ops.extend(ocr_operations(
-            width_pts, height_pts, 0.0, 0.0, font_ref, input,
-        ));
+        ops.extend(ocr_operations(font_ref, input));
     }
 
     let content_id = add_compressed_content(doc, ops)?;
@@ -597,29 +565,18 @@ fn finalize_image_doc(doc: &mut Document, pages_id: ObjectId, page_ids: Vec<Obje
 fn apply_ocr_to_doc(doc: &mut Document, json_opts: &[Option<&str>]) -> Result<()> {
     let font_obj = add_glyphless_font(doc);
 
-    let page_info: Vec<(ObjectId, [f64; 4])> = doc
-        .get_pages()
-        .into_values()
-        .map(|id| {
-            let mb = get_media_box(doc, id).unwrap_or([0.0, 0.0, 612.0, 792.0]);
-            (id, mb)
-        })
-        .collect();
+    let page_ids: Vec<ObjectId> = doc.get_pages().into_values().collect();
 
-    for (i, (page_id, mb)) in page_info.iter().enumerate() {
+    for (i, page_id) in page_ids.iter().enumerate() {
         let json_str = match json_opts.get(i).and_then(|o| *o) {
             Some(s) => s,
             None => continue,
         };
 
         let input: OCRInput = serde_json::from_str(json_str)?;
-        let width_pts = mb[2] - mb[0];
-        let height_pts = mb[3] - mb[1];
-        let x_off = mb[0];
-        let y_off = mb[1];
 
         let font_ref = Object::Name(FONT_NAME.into());
-        let ops = ocr_operations(width_pts, height_pts, x_off, y_off, font_ref, input);
+        let ops = ocr_operations(font_ref, input);
 
         let content_id = add_compressed_content(doc, ops)?;
 
@@ -1046,46 +1003,46 @@ mod tests {
 
     #[test]
     fn level_baseline_nearly_horizontal_clips() {
-        let (p1, p2) = level_baseline(pt(0.1, 0.500), pt(0.6, 0.501));
-        let avg_y = (0.500 + 0.501) / 2.0;
+        let (p1, p2) = level_baseline(pt(60.0, 300.0), pt(360.0, 300.6));
+        let avg_y = (300.0 + 300.6) / 2.0;
         assert_eq!(p1.y, avg_y);
         assert_eq!(p2.y, avg_y);
-        assert_eq!(p1.x, 0.1);
-        assert_eq!(p2.x, 0.6);
+        assert_eq!(p1.x, 60.0);
+        assert_eq!(p2.x, 360.0);
     }
 
     #[test]
     fn level_baseline_exact_horizontal_clips() {
-        let (p1, p2) = level_baseline(pt(0.1, 0.5), pt(0.9, 0.5));
-        assert_eq!(p1.y, 0.5);
-        assert_eq!(p2.y, 0.5);
+        let (p1, p2) = level_baseline(pt(60.0, 300.0), pt(540.0, 300.0));
+        assert_eq!(p1.y, 300.0);
+        assert_eq!(p2.y, 300.0);
     }
 
     #[test]
     fn level_baseline_vertical_unchanged() {
-        let (p1, p2) = level_baseline(pt(0.5, 0.1), pt(0.5, 0.6));
-        assert_eq!(p1, pt(0.5, 0.1));
-        assert_eq!(p2, pt(0.5, 0.6));
+        let (p1, p2) = level_baseline(pt(300.0, 60.0), pt(300.0, 360.0));
+        assert_eq!(p1, pt(300.0, 60.0));
+        assert_eq!(p2, pt(300.0, 360.0));
     }
 
     #[test]
     fn level_baseline_diagonal_unchanged() {
-        let (p1, p2) = level_baseline(pt(0.1, 0.1), pt(0.6, 0.6));
-        assert_eq!(p1, pt(0.1, 0.1));
-        assert_eq!(p2, pt(0.6, 0.6));
+        let (p1, p2) = level_baseline(pt(60.0, 60.0), pt(360.0, 360.0));
+        assert_eq!(p1, pt(60.0, 60.0));
+        assert_eq!(p2, pt(360.0, 360.0));
     }
 
     #[test]
     fn level_baseline_too_short_unchanged() {
-        let (p1, p2) = level_baseline(pt(0.1, 0.500), pt(0.105, 0.5001));
-        assert_eq!(p1, pt(0.1, 0.500));
-        assert_eq!(p2, pt(0.105, 0.5001));
+        let (p1, p2) = level_baseline(pt(60.0, 300.0), pt(60.5, 300.06));
+        assert_eq!(p1, pt(60.0, 300.0));
+        assert_eq!(p2, pt(60.5, 300.06));
     }
 
     #[test]
     fn level_baseline_just_above_threshold_unchanged() {
-        let (p1, p2) = level_baseline(pt(0.0, 0.0), pt(0.5, 0.014));
+        let (p1, p2) = level_baseline(pt(0.0, 0.0), pt(300.0, 8.4));
         assert_eq!(p1, pt(0.0, 0.0));
-        assert_eq!(p2, pt(0.5, 0.014));
+        assert_eq!(p2, pt(300.0, 8.4));
     }
 }

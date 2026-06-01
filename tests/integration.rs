@@ -8,6 +8,8 @@ use std::ffi::{CStr, CString};
 use std::fs;
 use std::path::Path;
 
+const TEST_DPI: f64 = 300.0;
+
 struct TestPage {
     img_bytes: Vec<u8>,
     width: u32,
@@ -57,7 +59,7 @@ fn build_streaming_image_pdf(pages: &[TestPage]) -> Vec<u8> {
                 p.img_bytes.len(),
                 p.width,
                 p.height,
-                300.0,
+                TEST_DPI,
                 p.json.as_ptr(),
             );
         }
@@ -93,7 +95,7 @@ fn doc_finish_images_to_path_writes_valid_pdf() {
                 p.img_bytes.len(),
                 p.width,
                 p.height,
-                300.0,
+                TEST_DPI,
                 p.json.as_ptr(),
             );
         }
