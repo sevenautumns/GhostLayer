@@ -9,7 +9,7 @@ name = "ghostlayer"
 crate-type = ["staticlib", "lib"]
 
 [dependencies]
-lopdf = { version = "0.40", features = ["embed_image"] }
+lopdf = { version = "0.41", features = ["embed_image"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 image = { version = "0.25", default-features = false, features = [
